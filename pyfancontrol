@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+from os import listdir,makedirs,unlink
+from os.path import sep as psep,exists,isdir,abspath,dirname
+from sys import exit,argv
+from pprint import pprint
+from subprocess import check_call,Popen,DEVNULL,PIPE,CalledProcessError,check_output
+from time import sleep
+
+TARGET_TEMP = int(argv[1])
+SYS_HWMON_PATH="/sys/class/hwmon"
+HWMON_NAME="nouveau"
+BACKUP_DIR_PATH="/tmp/.pyfancontrol"
+PWM_RANGE=range(30,101)
+HEAT_CAP=1
+FAN_MASS=1
+INTERVAL=1
+P=0.005
+MAX_FAN_SPEED=3000
+MIN_FAN_SPEED=500
+
+_print=print
+def print(*z,**zz):
+    pass
+    #_print(*z,**zz)
+    pass
+
+def get_controlfiles():
+    hwmon_subdirs=listdir(SYS_HWMON_PATH)
+    hwmon_path=None
+    for sdir in hwmon_subdirs:
+        check_hwmon_path = SYS_HWMON_PATH + psep + sdir
+        with open(check_hwmon_path+psep +"name") as f:
+            name=f.read().strip()
+            if name==HWMON_NAME:
+                hwmon_path = check_hwmon_path
+                break
+    
+    if hwmon_path is None:
+        exit(1)
+    
+    control_files  =   { 
+                            "in0" :  {
+                                        "filename": "temp1_input"
+                                    },
+                            "in1" :  {
+                                        "filename": "fan1_input"
+                                    },
+                            "out" : {
+                                        "filename": "pwm1"
+                                    },
+                            "enable" :  {
+                                            "filename": "pwm1_enable"
+                                        },
+                            "min_out" :  {
+                                            "filename": "pwm1_min"
+                                        },
+                            "max_out" :  {
+                                            "filename": "pwm1_max"
+                                        },
+                        }
+    
+    for k in control_files.keys():
+        control_files[k].update({"path": None})
+        control_files[k].update({"check_path": hwmon_path+psep+control_files[k]["filename"]})
+    
+    for k in control_files.keys():
+        if exists(control_files[k]["check_path"]):
+            control_files[k]["path"]=control_files[k]["check_path"]
+            control_files[k].pop("check_path")
+    return control_files
+
+def sudo_write_to_file(data,filep):
+    cmd=["sudo","dd","of="+filep]
+    p=Popen(cmd,stdin=PIPE,stderr=DEVNULL)
+    p.communicate(input=data)
+    p.wait()
+    if not p.returncode==0:
+        raise CalledProcessError()
+
+def write_to_file(data,filep):
+    with open(filep,mode="wb") as f:
+        f.write(data)
+
+def sudo_read_from_file(filep):
+    cmd=["sudo","cat",filep]
+    outp=check_output(cmd)
+    return outp
+
+def read_from_file(filep):
+    with open(filep,'rb') as f:
+        return f.read()
+
+def prepare_backup_dir_path():
+    makedirs(BACKUP_DIR_PATH,exist_ok=True)
+    if not isdir(BACKUP_DIR_PATH):
+        raise Exception("ERROR: backup dir path \""+BACKUP_DIR_PATH+"\" exists and is not a directory.")
+def backup_file(filep,keep_existing=True):
+    prepare_backup_dir_path()
+    backuppath=abspath(BACKUP_DIR_PATH)+abspath(filep)
+    data=read_from_file(filep)
+    makedirs(dirname(backuppath),exist_ok=True)
+    if isdir(backuppath):
+        raise Exception("ERROR: backup path \""+backuppath+"\" exists and is a directory.")
+    if not keep_existing or (keep_existing and not exists(backuppath)):
+        with open(backuppath,mode="wb") as f:
+            f.write(data)
+
+def restore_file(filep):
+    backuppath=abspath(BACKUP_DIR_PATH)+abspath(filep)
+    with open(backuppath,mode="rb") as f:
+        data=f.read()
+    write_to_file(data,filep)
+    unlink(backuppath)
+
+def set_max_pwm(control_files):
+    backup_file(control_files["max_out"]["path"])
+    write_to_file(str(PWM_RANGE[-1]).encode(),control_files["max_out"]["path"])
+
+def set_min_pwm(control_files):
+    backup_file(control_files["min_out"]["path"])
+    write_to_file(str(PWM_RANGE[0]).encode(),control_files["min_out"]["path"])
+
+def enable_control(control_files):
+    set_min_pwm(control_files)
+    set_max_pwm(control_files)
+    backup_file(control_files["enable"]["path"])
+    write_to_file(b"1",control_files["enable"]["path"])
+
+def disable_control(control_files):
+    restore_file(control_files["enable"]["path"])
+    restore_file(control_files["min_out"]["path"])
+    restore_file(control_files["max_out"]["path"])
+
+def get_temp():
+    return int(read_from_file(control_files["in0"]["path"]))/1000
+
+def set_pwm(val):
+    min_pwm=PWM_RANGE[0]
+    max_pwm=PWM_RANGE[-1]
+    pwm_val=min_pwm+round((max_pwm-min_pwm)*val)
+    print("pwm,pwm_val",round(pwm,3),pwm_val)
+    write_to_file(str(pwm_val).encode(),control_files["out"]["path"])
+
+def get_fan_speed():
+    return int(read_from_file(control_files["in1"]["path"]))
+
+def get_fan_energy():
+    return FAN_MASS*get_fan_speed()**2
+
+def get_heat():
+    return get_temp() * HEAT_CAP
+
+def eval_table(table_pwm):
+    itemsum=1
+    val=pwm
+    backrange=min(5,len(table_pwm))
+    for i in range(backrange):
+        boost = table_pwm[-i][0]*(backrange-i)
+        itemsum += boost
+        val+= table_pwm[-i][1] * boost
+    return val/itemsum
+    
+def control_loop():
+    global pwm
+    global deltazerocount
+    pwm=0.5
+    #deltazerocount=0
+    #table_pwm=[]
+    while True:
+        fan_speed=get_fan_speed()
+        temp=get_temp()
+        delta=temp-TARGET_TEMP
+        if delta != 0 or fan_speed < MIN_FAN_SPEED or fan_speed > MAX_FAN_SPEED:
+            print("delta temp = "+str(delta))
+
+            ## update table
+            #if deltazerocount > 0:
+            #    table_pwm+=[(deltazerocount,pwm)]
+            #    pprint(table_pwm)
+            #deltazerocount=0
+           
+            if MIN_FAN_SPEED < fan_speed < MAX_FAN_SPEED:
+                adj=P*delta**3
+                print("pwm,delta*P",round(pwm,3),round(adj,3))
+                pwm+=adj
+                #old_pwm=pwm
+                #pwm=(2*pwm+eval_table(table_pwm))/3
+                #print("pwm,d_et   ",round(old_pwm,3),round(pwm-old_pwm,3))
+            elif fan_speed < MIN_FAN_SPEED:
+                pwm+=P
+            else:
+                pwm-=P
+            
+            pwm=min(max(pwm,0),1)
+            set_pwm(pwm)
+            #print("fan_energy = "+str(int(fan_energy/1000)))
+            #print("temp       = "+str(temp))
+        else:
+            print("temp ok")
+            #deltazerocount+=1
+        sleep(INTERVAL)
+        print()
+
+
+if __name__=="__main__":
+    if len(argv) > 2 and argv[2] == "-s":
+        read_from_file=sudo_read_from_file
+        write_to_file=sudo_write_to_file
+    control_files=get_controlfiles()
+    enable_control(control_files)
+    try:
+        control_loop()
+    finally:
+        disable_control(control_files)
+
+
+# vim: set syntax=python foldmethod=indent foldlevel=0 foldnestmax=1 :
