@@ -84,6 +84,14 @@ def get_controlfiles():
                                             "hwmon_name" : PWM[0],
                                             "filename"   : PWM[1]+"_max",
                                         },
+                            "min_in1" :  {
+                                        "hwmon_name" : IN1[0],
+                                        "filename"   : IN1[1]+"_min",
+                                    },
+                            "max_in1" :  {
+                                        "hwmon_name" : IN1[0],
+                                        "filename"   : IN1[1]+"_max",
+                                    },
                         }
     for k in control_files.keys():
         control_files[k].update({"path": None})
@@ -152,15 +160,29 @@ def set_max_pwm(control_files):
     backup_file(control_files["max_out"]["path"])
     write_to_file(str(PWM_RANGE[-1]).encode(),control_files["max_out"]["path"])
 
+def set_max_in1(control_files):
+    if control_files["max_in1"]["path"] is None:
+        return
+    backup_file(control_files["max_in1"]["path"])
+    write_to_file(str(MAX_FAN_SPEED).encode(),control_files["max_in1"]["path"])
+
 def set_min_pwm(control_files):
     if control_files["min_out"]["path"] is None:
         return
     backup_file(control_files["min_out"]["path"])
     write_to_file(str(PWM_RANGE[0]).encode(),control_files["min_out"]["path"])
 
+def set_min_in1(control_files):
+    if control_files["min_in1"]["path"] is None:
+        return
+    backup_file(control_files["min_in1"]["path"])
+    write_to_file(str(MIN_FAN_SPEED).encode(),control_files["min_in1"]["path"])
+
 def enable_control(control_files):
     set_min_pwm(control_files)
     set_max_pwm(control_files)
+    set_min_in1(control_files)
+    set_max_in1(control_files)
     backup_file(control_files["enable"]["path"])
     write_to_file(b"1",control_files["enable"]["path"])
 
@@ -168,6 +190,8 @@ def disable_control(control_files):
     restore_file(control_files["enable"]["path"])
     restore_file(control_files["min_out"]["path"])
     restore_file(control_files["max_out"]["path"])
+    restore_file(control_files["min_in1"]["path"])
+    restore_file(control_files["max_in1"]["path"])
 
 def get_temp():
     return int(read_from_file(control_files["in0"]["path"]))/1000
