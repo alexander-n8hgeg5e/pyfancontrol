@@ -6,67 +6,98 @@ from pprint import pprint
 from subprocess import check_call,Popen,DEVNULL,PIPE,CalledProcessError,check_output
 from time import sleep
 
-TARGET_TEMP = int(argv[1])
 SYS_HWMON_PATH="/sys/class/hwmon"
-HWMON_NAME="nouveau"
-BACKUP_DIR_PATH="/tmp/.pyfancontrol"
-PWM_RANGE=range(30,101)
-HEAT_CAP=1
-FAN_MASS=1
-INTERVAL=1
-P=0.005
-MAX_FAN_SPEED=3000
-MIN_FAN_SPEED=500
+BACKUP_DIR_PATH_PREFIX="/tmp/.pyfancontrol_"
 
 _print=print
+
+def parse_args():
+    from argparse import ArgumentParser
+    ap=ArgumentParser()
+    ap.add_argument("--pwm-range",nargs=2,type=int,default=[30,101])
+    ap.add_argument("--max-fan-speed",type=int,default=3000)
+    ap.add_argument("--min-fan-speed",type=int,default=500)
+    ap.add_argument("--interval",type=float,default=1)
+    ap.add_argument("--heat-cap",type=float,default=1)
+    ap.add_argument("--fan-mass",type=float,default=1)
+    ap.add_argument("-p",type=float,default=0.005)
+    ap.add_argument(dest="target_temp",nargs=1,type=float)
+    ap.add_argument("--in0",default=["nouveau","temp1_input"] ,nargs=2)
+    ap.add_argument("--in1",default=["nouveau","fan1_input"]  ,nargs=2)
+    ap.add_argument("--pwm",default=["nouveau","pwm1"]        ,nargs=2)
+    ap.add_argument("-s","--sudo",action="store_true",)
+    ap.add_argument("--test",action="store_true")
+    global args
+    args=ap.parse_args()
+    global TARGET_TEMP
+    global HWMON_NAME
+    global BACKUP_DIR_PATH
+    global PWM_RANGE
+    global HEAT_CAP
+    global INTERVAL
+    global P
+    global MAX_FAN_SPEED
+    global MIN_FAN_SPEED
+    global IN0
+    global IN1
+    global PWM
+    TARGET_TEMP=args.target_temp[0]
+    PWM_RANGE=range(*args.pwm_range)
+    HEAT_CAP=args.heat_cap
+    INTERVAL=args.interval
+    P=args.p
+    MAX_FAN_SPEED=args.max_fan_speed
+    MIN_FAN_SPEED=args.min_fan_speed
+    BACKUP_DIR_PATH=BACKUP_DIR_PATH_PREFIX+args.in1[0]
+    IN0=args.in0
+    IN1=args.in1
+    PWM=args.pwm
+
 def print(*z,**zz):
     pass
     #_print(*z,**zz)
     pass
 
 def get_controlfiles():
+    control_files  =   { 
+                            "in0" :  {
+                                        "hwmon_name" : IN0[0],
+                                        "filename"   : IN0[1],   
+                                    },
+                            "in1" :  {
+                                        "hwmon_name" : IN1[0],
+                                        "filename"   : IN1[1],
+                                    },
+                            "out" : {
+                                        "hwmon_name" : PWM[0],
+                                        "filename"   : PWM[1],
+                                    },
+                            "enable" :  {
+                                            "hwmon_name" : PWM[0],
+                                            "filename"   : PWM[1]+"_enable",
+                                        },
+                            "min_out" :  {
+                                            "hwmon_name" : PWM[0],
+                                            "filename"   : PWM[1]+"_min",
+                                        },
+                            "max_out" :  {
+                                            "hwmon_name" : PWM[0],
+                                            "filename"   : PWM[1]+"_max",
+                                        },
+                        }
+    for k in control_files.keys():
+        control_files[k].update({"path": None})
     hwmon_subdirs=listdir(SYS_HWMON_PATH)
     hwmon_path=None
     for sdir in hwmon_subdirs:
         check_hwmon_path = SYS_HWMON_PATH + psep + sdir
         with open(check_hwmon_path+psep +"name") as f:
             name=f.read().strip()
-            if name==HWMON_NAME:
-                hwmon_path = check_hwmon_path
-                break
-    
-    if hwmon_path is None:
-        exit(1)
-    
-    control_files  =   { 
-                            "in0" :  {
-                                        "filename": "temp1_input"
-                                    },
-                            "in1" :  {
-                                        "filename": "fan1_input"
-                                    },
-                            "out" : {
-                                        "filename": "pwm1"
-                                    },
-                            "enable" :  {
-                                            "filename": "pwm1_enable"
-                                        },
-                            "min_out" :  {
-                                            "filename": "pwm1_min"
-                                        },
-                            "max_out" :  {
-                                            "filename": "pwm1_max"
-                                        },
-                        }
-    
-    for k in control_files.keys():
-        control_files[k].update({"path": None})
-        control_files[k].update({"check_path": hwmon_path+psep+control_files[k]["filename"]})
-    
-    for k in control_files.keys():
-        if exists(control_files[k]["check_path"]):
-            control_files[k]["path"]=control_files[k]["check_path"]
-            control_files[k].pop("check_path")
+            for k,v in control_files.copy().items():
+                if name==v['hwmon_name']:
+                    check_path = check_hwmon_path+psep+v["filename"]
+                    if exists(check_path):
+                        control_files[k]["path"] = check_path
     return control_files
 
 def sudo_write_to_file(data,filep):
@@ -94,6 +125,7 @@ def prepare_backup_dir_path():
     makedirs(BACKUP_DIR_PATH,exist_ok=True)
     if not isdir(BACKUP_DIR_PATH):
         raise Exception("ERROR: backup dir path \""+BACKUP_DIR_PATH+"\" exists and is not a directory.")
+
 def backup_file(filep,keep_existing=True):
     prepare_backup_dir_path()
     backuppath=abspath(BACKUP_DIR_PATH)+abspath(filep)
@@ -106,6 +138,8 @@ def backup_file(filep,keep_existing=True):
             f.write(data)
 
 def restore_file(filep):
+    if filep is None:
+        return
     backuppath=abspath(BACKUP_DIR_PATH)+abspath(filep)
     with open(backuppath,mode="rb") as f:
         data=f.read()
@@ -113,10 +147,14 @@ def restore_file(filep):
     unlink(backuppath)
 
 def set_max_pwm(control_files):
+    if control_files["max_out"]["path"] is None:
+        return
     backup_file(control_files["max_out"]["path"])
     write_to_file(str(PWM_RANGE[-1]).encode(),control_files["max_out"]["path"])
 
 def set_min_pwm(control_files):
+    if control_files["min_out"]["path"] is None:
+        return
     backup_file(control_files["min_out"]["path"])
     write_to_file(str(PWM_RANGE[0]).encode(),control_files["min_out"]["path"])
 
@@ -201,12 +239,16 @@ def control_loop():
         sleep(INTERVAL)
         print()
 
-
 if __name__=="__main__":
-    if len(argv) > 2 and argv[2] == "-s":
+    parse_args()
+    if args.sudo:
         read_from_file=sudo_read_from_file
         write_to_file=sudo_write_to_file
     control_files=get_controlfiles()
+    if args.test:
+        from pprint import pprint
+        pprint(control_files)
+        exit()
     enable_control(control_files)
     try:
         control_loop()
