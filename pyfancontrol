@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
 from os import listdir,makedirs,unlink
 from os.path import sep as psep,exists,isdir,abspath,dirname
-from sys import exit,argv
+from sys import exit,argv,stderr
 from pprint import pprint
 from subprocess import check_call,Popen,DEVNULL,PIPE,CalledProcessError,check_output
 from time import sleep
+from pylib.list_utils import equalize_lists
 
 SYS_HWMON_PATH="/sys/class/hwmon"
 BACKUP_DIR_PATH_PREFIX="/tmp/.pyfancontrol_"
+restore_list=[]
 
 def parse_args():
     from argparse import ArgumentParser
     ap=ArgumentParser()
     ap.add_argument("--pwm-range",nargs=2,type=int,default=[30,101])
-    ap.add_argument("--max-fan-speed",type=int,default=3000)
-    ap.add_argument("--min-fan-speed",type=int,default=500)
-    ap.add_argument("--max1fn",default=None)
-    ap.add_argument("--min1fn",default=None)
+    ap.add_argument("--max-in1",type=int,default=3000)
+    ap.add_argument("--min-in1",type=int,default=500)
+    ap.add_argument("--max-in1-fn",default=None,nargs="?")
+    ap.add_argument("--min-in1-fn",default=None,nargs="?")
+    ap.add_argument("--max-in0-fns",default=None,nargs="*")
+    ap.add_argument("--min-in0-fns",default=None,nargs="*")
+    ap.add_argument("--max-in0s",nargs="*",type=int,default=[80000])
+    ap.add_argument("--min-in0s",nargs="*",type=int,default=[5000])
     ap.add_argument("--interval",type=float,default=1)
     ap.add_argument("--heat-cap",type=float,default=1)
     ap.add_argument("--fan-mass",type=float,default=1)
@@ -38,10 +44,8 @@ def parse_args():
     global HEAT_CAP
     global INTERVAL
     global P
-    global MAX_FAN_SPEED
-    global MIN_FAN_SPEED
-    global MAX_FAN_SPEED_FN
-    global MIN_FAN_SPEED_FN
+    global EXTRA_SET_FILES
+    EXTRA_SET_FILES=[]
     global IN0
     global IN1
     global PWM
@@ -53,14 +57,23 @@ def parse_args():
     HEAT_CAP=args.heat_cap
     INTERVAL=args.interval
     P=args.p
-    MAX_FAN_SPEED=args.max_fan_speed
-    MIN_FAN_SPEED=args.min_fan_speed
     BACKUP_DIR_PATH=BACKUP_DIR_PATH_PREFIX+args.in1[0]
     IN0=args.in0
     IN1=args.in1
     PWM=args.pwm
-    MIN_FAN_SPEED_FN=args.min1fn
-    MAX_FAN_SPEED_FN=args.max1fn
+    global MIN_IN1
+    global MAX_IN1
+    MIN_IN1=args.min_in1
+    MAX_IN1=args.max_in1
+
+    EXTRA_SET_FILES.append((args.pwm[0],args.pwm[1]+"_min",PWM_RANGE[0],"min_pwm"))
+    EXTRA_SET_FILES.append((args.pwm[0],args.pwm[1]+"_max",PWM_RANGE[1],"max_pwm"))
+
+    EXTRA_SET_FILES.append((args.in1[0],args.min_in1_fn,args.min_in1,"min_in1"))
+    EXTRA_SET_FILES.append((args.in1[0],args.max_in1_fn,args.max_in1,"max_in1"))
+
+    EXTRA_SET_FILES.append((args.in0[0],args.min_in0_fns,args.min_in0s,"min_in0s"))
+    EXTRA_SET_FILES.append((args.in0[0],args.max_in0_fns,args.max_in0s,"max_in0s"))
 
 def get_controlfiles():
     control_files  =   { 
@@ -80,23 +93,36 @@ def get_controlfiles():
                                             "hwmon_name" : PWM[0],
                                             "filename"   : PWM[1]+"_enable",
                                         },
-                            "min_out" :  {
-                                            "hwmon_name" : PWM[0],
-                                            "filename"   : PWM[1]+"_min",
-                                        },
-                            "max_out" :  {
-                                            "hwmon_name" : PWM[0],
-                                            "filename"   : PWM[1]+"_max",
-                                        },
-                            "min_in1" :  {
-                                        "hwmon_name" : IN1[0],
-                                        "filename"   : MIN_FAN_SPEED_FN,
-                                    },
-                            "max_in1" :  {
-                                        "hwmon_name" : IN1[0],
-                                        "filename"   : MAX_FAN_SPEED_FN,
-                                    },
                         }
+    #---------------------------#
+    #  add the extra set files  #
+    #---------------------------#
+    i=0
+    for extra_thing in EXTRA_SET_FILES:
+        hwmon_names,filenames,values,names = extra_thing
+        if not type(hwmon_names) is list:
+            hwmon_names=[hwmon_names]
+        if not type(filenames) is list:
+            filenames=[filenames]
+        if not type(values) is list:
+            values=[values]
+        if not type(names) is list:
+            names=[names]
+        lists=equalize_lists([hwmon_names,filenames,values,names])
+        for j in range(len(lists[1])):
+            d = { "extra_set_file_" + names[j] +"_"+ str(j) :    {
+                                                                "hwmon_name": hwmon_names[j] ,
+                                                                "filename": filenames[j],
+                                                                "value" : values[j],
+                                                                }
+                }
+            control_files.update(d)
+        i+=1
+
+    #--------------------------------------#
+    #   check all the files for existence  #
+    #   and store their path(es)           #
+    #--------------------------------------#
     for k in control_files.keys():
         control_files[k].update({"path": None})
     hwmon_subdirs=listdir(SYS_HWMON_PATH)
@@ -137,28 +163,30 @@ def get_controlfiles():
                             control_files[k].pop("path")
                         elif args.verbose:
                             print("note: no filenames supplied for \"{}\"".format(k))
-
     return control_files
 
 def sudo_write_to_file(data,filep):
-    cmd=["sudo","dd","of="+filep]
+    cmd=["sudo","dd","of="+filep,"status=none"]
     if args.dry_run:
         print("dry run write to file \"{}\", data=\"{}\"".format(filep,data))
         cmd=["echo"]+cmd
     elif args.verbose:
         print('writing to file="{}", data="{}"'.format(filep,data))
-    p=Popen(cmd,stdin=PIPE,stderr=DEVNULL)
+    p=Popen(cmd,stdin=PIPE)
     p.communicate(input=data)
     p.wait()
     if not p.returncode==0:
-        raise CalledProcessError()
+        raise CalledProcessError(p.returncode,cmd)
 
 def write_to_file(data,filep):
     if not args.dry_run:
         if args.verbose:
             print("writing \"{}\"to file: \"{}\"".format(data,filep))
         with open(filep,mode="wb") as f:
-            f.write(data)
+            try:
+                f.write(data)
+            except OSError:
+                raise Exception("ERROR: could not write to file.\nfilepath={}".format(filep))
     else:
         print("dry run write to file \"{}\", data=\"{}\"".format(filep,data))
 
@@ -200,6 +228,7 @@ def backup_file(filep,keep_existing=True):
                 print('writing backupfile "{}"'.format(backuppath))
             with open(backuppath,mode="wb") as f:
                 f.write(data)
+                restore_list.append(backuppath)
         else:
             print('dry run backup file, would write to "{}".'.format(backuppath))
 
@@ -217,46 +246,27 @@ def restore_file(filep):
     else:
         print('dry run restore file, would delete "{}".'.format(backuppath))
 
-def set_max_pwm(control_files):
-    if control_files["max_out"]["path"] is None:
-        return
-    backup_file(control_files["max_out"]["path"])
-    write_to_file(str(PWM_RANGE[-1]).encode(),control_files["max_out"]["path"])
-
-def set_max_in1(control_files):
-    if control_files["max_in1"]["path"] is None:
-        return
-    backup_file(control_files["max_in1"]["path"])
-    write_to_file(str(MAX_FAN_SPEED).encode(),control_files["max_in1"]["path"])
-
-def set_min_pwm(control_files):
-    if control_files["min_out"]["path"] is None:
-        return
-    backup_file(control_files["min_out"]["path"])
-    write_to_file(str(PWM_RANGE[0]).encode(),control_files["min_out"]["path"])
-
-def set_min_in1(control_files):
-    if control_files["min_in1"]["path"] is None:
-        return
-    backup_file(control_files["min_in1"]["path"])
-    write_to_file(str(MIN_FAN_SPEED).encode(),control_files["min_in1"]["path"])
+def value2file(value_name,control_files):
+    data=control_files[value_name]
+    if "path" in data.keys():
+        p=data["path"]
+        if p is None:
+            return
+        backup_file(p)
+        write_to_file(str(data['value']).encode(),p)
+    else:
+        raise Exception("ERROR: no single path in data found,value name = {}, data:\n{}".format(value_name,data))
 
 def enable_control(control_files):
-    set_min_pwm(control_files)
-    set_max_pwm(control_files)
-    if not MAX_FAN_SPEED_FN is None:
-        set_min_in1(control_files)
-    if not MAX_FAN_SPEED_FN is None:
-        set_max_in1(control_files)
+    for k in control_files.keys():
+        if k[:14]=="extra_set_file":
+            value2file(k,control_files)
     backup_file(control_files["enable"]["path"])
     write_to_file(b"1",control_files["enable"]["path"])
 
 def disable_control(control_files):
-    restore_file(control_files["enable"]["path"])
-    restore_file(control_files["min_out"]["path"])
-    restore_file(control_files["max_out"]["path"])
-    restore_file(control_files["min_in1"]["path"])
-    restore_file(control_files["max_in1"]["path"])
+    for fp in restore_list:
+        restore_file(fp)
 
 def get_temp():
     in0=control_files["in0"]
@@ -309,7 +319,7 @@ def control_loop():
         if args.verbose:
             print("temp={}".format(temp))
         delta=temp-TARGET_TEMP
-        if delta != 0 or fan_speed < MIN_FAN_SPEED or fan_speed > MAX_FAN_SPEED:
+        if delta != 0 or fan_speed < MIN_IN1 or fan_speed > MAX_IN1:
             print("delta temp = "+str(delta))
 
             ## update table
@@ -318,14 +328,14 @@ def control_loop():
             #    pprint(table_pwm)
             #deltazerocount=0
            
-            if MIN_FAN_SPEED < fan_speed < MAX_FAN_SPEED:
+            if MIN_IN1 < fan_speed < MAX_IN1:
                 adj=P*delta**3
                 print("pwm,delta*P",round(pwm,3),round(adj,3))
                 pwm+=adj
                 #old_pwm=pwm
                 #pwm=(2*pwm+eval_table(table_pwm))/3
                 #print("pwm,d_et   ",round(old_pwm,3),round(pwm-old_pwm,3))
-            elif fan_speed < MIN_FAN_SPEED:
+            elif fan_speed < MIN_IN1:
                 pwm+=P
             else:
                 pwm-=P
