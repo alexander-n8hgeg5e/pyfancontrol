@@ -9,8 +9,6 @@ from time import sleep
 SYS_HWMON_PATH="/sys/class/hwmon"
 BACKUP_DIR_PATH_PREFIX="/tmp/.pyfancontrol_"
 
-_print=print
-
 def parse_args():
     from argparse import ArgumentParser
     ap=ArgumentParser()
@@ -27,6 +25,7 @@ def parse_args():
     ap.add_argument("--pwm",default=["nouveau","pwm1"]        ,nargs=2)
     ap.add_argument("-s","--sudo",action="store_true",)
     ap.add_argument("--test",action="store_true")
+    ap.add_argument("--verbose",action="store_true")
     global args
     args=ap.parse_args()
     global TARGET_TEMP
@@ -42,7 +41,7 @@ def parse_args():
     global IN1
     global PWM
     TARGET_TEMP=args.target_temp[0]
-    PWM_RANGE=range(*args.pwm_range)
+    PWM_RANGE=range(args.pwm_range[0],args.pwm_range[-1]+1)
     HEAT_CAP=args.heat_cap
     INTERVAL=args.interval
     P=args.p
@@ -52,11 +51,6 @@ def parse_args():
     IN0=args.in0
     IN1=args.in1
     PWM=args.pwm
-
-def print(*z,**zz):
-    pass
-    #_print(*z,**zz)
-    pass
 
 def get_controlfiles():
     control_files  =   { 
@@ -110,6 +104,11 @@ def get_controlfiles():
 
 def sudo_write_to_file(data,filep):
     cmd=["sudo","dd","of="+filep]
+    if args.dry_run:
+        print("dry run write to file \"{}\", data=\"{}\"".format(filep,data))
+        cmd=["echo"]+cmd
+    elif args.verbose:
+        print('writing to file="{}", data="{}"'.format(filep,data))
     p=Popen(cmd,stdin=PIPE,stderr=DEVNULL)
     p.communicate(input=data)
     p.wait()
@@ -117,8 +116,13 @@ def sudo_write_to_file(data,filep):
         raise CalledProcessError()
 
 def write_to_file(data,filep):
-    with open(filep,mode="wb") as f:
-        f.write(data)
+    if not args.dry_run:
+        if args.verbose:
+            print("writing \"{}\"to file: \"{}\"".format(data,filep))
+        with open(filep,mode="wb") as f:
+            f.write(data)
+    else:
+        print("dry run write to file \"{}\", data=\"{}\"".format(filep,data))
 
 def sudo_read_from_file(filep):
     cmd=["sudo","cat",filep]
@@ -130,7 +134,12 @@ def read_from_file(filep):
         return f.read()
 
 def prepare_backup_dir_path():
-    makedirs(BACKUP_DIR_PATH,exist_ok=True)
+    if not args.dry_run:
+        if args.verbose:
+            print('preparing backup dirs, makedirs: {}'.format(BACKUP_DIR_PATH))
+        makedirs(BACKUP_DIR_PATH,exist_ok=True)
+    else:
+        print("dry run makedirs: {}".format(BACKUP_DIR_PATH))
     if not isdir(BACKUP_DIR_PATH):
         raise Exception("ERROR: backup dir path \""+BACKUP_DIR_PATH+"\" exists and is not a directory.")
 
@@ -138,12 +147,23 @@ def backup_file(filep,keep_existing=True):
     prepare_backup_dir_path()
     backuppath=abspath(BACKUP_DIR_PATH)+abspath(filep)
     data=read_from_file(filep)
-    makedirs(dirname(backuppath),exist_ok=True)
+    dirname=dirname(backuppath)
+    if not args.dry_run:
+        if args.verbose:
+            print('makedirs "{}"'.format(dirname)
+        makedirs(dirname,exist_ok=True)
+    else:
+        print("dry run makedirs: {}".format(dirname)
     if isdir(backuppath):
         raise Exception("ERROR: backup path \""+backuppath+"\" exists and is a directory.")
     if not keep_existing or (keep_existing and not exists(backuppath)):
-        with open(backuppath,mode="wb") as f:
-            f.write(data)
+        if not args.dry_run:
+            if args.verbose:
+                print('writing backupfile "{}"'.format(backuppath))
+            with open(backuppath,mode="wb") as f:
+                f.write(data)
+        else:
+            print('dry run backup file, would write to "{}".'.format(backuppath))
 
 def restore_file(filep):
     if filep is None:
@@ -152,7 +172,12 @@ def restore_file(filep):
     with open(backuppath,mode="rb") as f:
         data=f.read()
     write_to_file(data,filep)
-    unlink(backuppath)
+    if not args.dry_run:
+        if args.verbose:
+            print("unlinking {}".format(backuppath))
+        unlink(backuppath)
+    else:
+        print('dry run restore file, would delete "{}".'.format(backuppath))
 
 def set_max_pwm(control_files):
     if control_files["max_out"]["path"] is None:
@@ -199,8 +224,9 @@ def get_temp():
 def set_pwm(val):
     min_pwm=PWM_RANGE[0]
     max_pwm=PWM_RANGE[-1]
+    print("pwm_range={}".format(PWM_RANGE))
+    print("min_pwm,max_pwm,value={}, {}, {}".format(min_pwm,max_pwm,val))
     pwm_val=min_pwm+round((max_pwm-min_pwm)*val)
-    print("pwm,pwm_val",round(pwm,3),pwm_val)
     write_to_file(str(pwm_val).encode(),control_files["out"]["path"])
 
 def get_fan_speed():
@@ -272,7 +298,6 @@ if __name__=="__main__":
     if args.test:
         from pprint import pprint
         pprint(control_files)
-        exit()
     enable_control(control_files)
     try:
         control_loop()
