@@ -9,7 +9,7 @@ command_args="${pyfancontrol_args}"
 pidfile="/var/run/"${RC_SVCNAME}".pid"
 command_background=true
 command_user="pyfancontrol:pyfancontrol"
-output_looger="logger -p daemon.info"
+output_logger="logger -p daemon.info"
 error_logger="logger -p daemon.error"
 
 start(){
