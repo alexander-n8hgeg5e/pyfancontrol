@@ -25,10 +25,10 @@ def parse_args():
     ap.add_argument("--in0",default=["nouveau","temp1_input"] , nargs='+' )
     ap.add_argument("--in1",default=["nouveau","fan1_input"]  ,nargs=2)
     ap.add_argument("--pwm",default=["nouveau","pwm1"]        ,nargs=2)
-    ap.add_argument("-s","--sudo",action="store_true",)
-    ap.add_argument("--test",action="store_true")
-    ap.add_argument("--dry-run",action="store_true")
-    ap.add_argument("-v","--verbose",action="store_true")
+    ap.add_argument("-s","--sudo",action="store_true",default=False)
+    ap.add_argument("--test",action="store_true",default=False)
+    ap.add_argument("--dry-run",action="store_true",default=False)
+    ap.add_argument("-v","--verbose",action="store_true",default=False)
     global args
     args=ap.parse_args()
     global TARGET_TEMP
