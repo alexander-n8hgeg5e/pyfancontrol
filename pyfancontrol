@@ -22,7 +22,7 @@ def parse_args():
     ap.add_argument("--fan-mass",type=float,default=1)
     ap.add_argument("-p",type=float,default=0.005)
     ap.add_argument(dest="target_temp",nargs=1,type=float)
-    ap.add_argument("--in0",default=["nouveau","temp1_input"] ,nargs=2)
+    ap.add_argument("--in0",default=["nouveau","temp1_input"] , nargs='+' )
     ap.add_argument("--in1",default=["nouveau","fan1_input"]  ,nargs=2)
     ap.add_argument("--pwm",default=["nouveau","pwm1"]        ,nargs=2)
     ap.add_argument("-s","--sudo",action="store_true",)
@@ -45,6 +45,9 @@ def parse_args():
     global IN0
     global IN1
     global PWM
+    if len(args.in0) < 2:
+        raise Exception(""""ERROR: need at least 2 args for --in1.
+                first one is hwmon-name second is sensor-file.""")
     TARGET_TEMP=args.target_temp[0]
     PWM_RANGE=range(args.pwm_range[0],args.pwm_range[-1]+1)
     HEAT_CAP=args.heat_cap
@@ -63,7 +66,7 @@ def get_controlfiles():
     control_files  =   { 
                             "in0" :  {
                                         "hwmon_name" : IN0[0],
-                                        "filename"   : IN0[1],   
+                                        "filenames"   : IN0[1:],   
                                     },
                             "in1" :  {
                                         "hwmon_name" : IN1[0],
@@ -104,18 +107,37 @@ def get_controlfiles():
             name=f.read().strip()
             for k,v in control_files.copy().items():
                 if name==v['hwmon_name']:
-                    if not v["filename"] is None:
-                        check_path = check_hwmon_path+psep+v["filename"]
-                        if args.verbose:
-                            print('checking path: "{}" '.format(check_path),end="")
-                        if exists(check_path):
+                    if 'filename' in v.keys():
+                        if not v["filename"] is None:
+                            check_path = check_hwmon_path+psep+v["filename"]
                             if args.verbose:
-                                print("ok")
-                            control_files[k]["path"] = check_path
-                        else:
-                            print("not existing")
-                    elif args.verbose:
-                        print("note: no filename supplied for \"{}\"".format(k))
+                                print('checking path: "{}" '.format(check_path),end="")
+                            if exists(check_path):
+                                if args.verbose:
+                                    print("ok")
+                                control_files[k]["path"] = check_path
+                            else:
+                                print("not existing")
+                        elif args.verbose:
+                            print("note: no filename supplied for \"{}\"".format(k))
+                    else:
+                        if len(v["filenames"]) > 0:
+                            checked_pathes=[]
+                            for fn in v["filenames"]:
+                                check_path = check_hwmon_path+psep+fn
+                                if args.verbose:
+                                    print('checking path: "{}" '.format(check_path),end="")
+                                if exists(check_path):
+                                    if args.verbose:
+                                        print("ok")
+                                    checked_pathes.append(check_path)
+                                else:
+                                    print("not existing")
+                            control_files[k].update({"pathes": checked_pathes})
+                            control_files[k].pop("path")
+                        elif args.verbose:
+                            print("note: no filenames supplied for \"{}\"".format(k))
+
     return control_files
 
 def sudo_write_to_file(data,filep):
@@ -237,7 +259,16 @@ def disable_control(control_files):
     restore_file(control_files["max_in1"]["path"])
 
 def get_temp():
-    return int(read_from_file(control_files["in0"]["path"]))/1000
+    in0=control_files["in0"]
+    if "path" in in0:
+        return int(read_from_file(control_files["in0"]["path"]))/1000
+    else:
+        pathes=in0["pathes"]
+        avg=[]
+        for p in pathes:
+            avg.append(int(read_from_file(p))/1000)
+        avg=sum(avg)/len(avg)
+        return avg
 
 def set_pwm(val):
     min_pwm=PWM_RANGE[0]
@@ -275,6 +306,8 @@ def control_loop():
     while True:
         fan_speed=get_fan_speed()
         temp=get_temp()
+        if args.verbose:
+            print("temp={}".format(temp))
         delta=temp-TARGET_TEMP
         if delta != 0 or fan_speed < MIN_FAN_SPEED or fan_speed > MAX_FAN_SPEED:
             print("delta temp = "+str(delta))
