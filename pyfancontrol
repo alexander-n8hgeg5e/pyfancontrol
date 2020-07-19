@@ -15,6 +15,8 @@ def parse_args():
     ap.add_argument("--pwm-range",nargs=2,type=int,default=[30,101])
     ap.add_argument("--max-fan-speed",type=int,default=3000)
     ap.add_argument("--min-fan-speed",type=int,default=500)
+    ap.add_argument("--max1fn",default=None)
+    ap.add_argument("--min1fn",default=None)
     ap.add_argument("--interval",type=float,default=1)
     ap.add_argument("--heat-cap",type=float,default=1)
     ap.add_argument("--fan-mass",type=float,default=1)
@@ -25,7 +27,8 @@ def parse_args():
     ap.add_argument("--pwm",default=["nouveau","pwm1"]        ,nargs=2)
     ap.add_argument("-s","--sudo",action="store_true",)
     ap.add_argument("--test",action="store_true")
-    ap.add_argument("--verbose",action="store_true")
+    ap.add_argument("--dry-run",action="store_true")
+    ap.add_argument("-v","--verbose",action="store_true")
     global args
     args=ap.parse_args()
     global TARGET_TEMP
@@ -37,6 +40,8 @@ def parse_args():
     global P
     global MAX_FAN_SPEED
     global MIN_FAN_SPEED
+    global MAX_FAN_SPEED_FN
+    global MIN_FAN_SPEED_FN
     global IN0
     global IN1
     global PWM
@@ -51,6 +56,8 @@ def parse_args():
     IN0=args.in0
     IN1=args.in1
     PWM=args.pwm
+    MIN_FAN_SPEED_FN=args.min1fn
+    MAX_FAN_SPEED_FN=args.max1fn
 
 def get_controlfiles():
     control_files  =   { 
@@ -80,11 +87,11 @@ def get_controlfiles():
                                         },
                             "min_in1" :  {
                                         "hwmon_name" : IN1[0],
-                                        "filename"   : IN1[1]+"_min",
+                                        "filename"   : MIN_FAN_SPEED_FN,
                                     },
                             "max_in1" :  {
                                         "hwmon_name" : IN1[0],
-                                        "filename"   : IN1[1]+"_max",
+                                        "filename"   : MAX_FAN_SPEED_FN,
                                     },
                         }
     for k in control_files.keys():
@@ -97,9 +104,18 @@ def get_controlfiles():
             name=f.read().strip()
             for k,v in control_files.copy().items():
                 if name==v['hwmon_name']:
-                    check_path = check_hwmon_path+psep+v["filename"]
-                    if exists(check_path):
-                        control_files[k]["path"] = check_path
+                    if not v["filename"] is None:
+                        check_path = check_hwmon_path+psep+v["filename"]
+                        if args.verbose:
+                            print('checking path: "{}" '.format(check_path),end="")
+                        if exists(check_path):
+                            if args.verbose:
+                                print("ok")
+                            control_files[k]["path"] = check_path
+                        else:
+                            print("not existing")
+                    elif args.verbose:
+                        print("note: no filename supplied for \"{}\"".format(k))
     return control_files
 
 def sudo_write_to_file(data,filep):
@@ -147,13 +163,13 @@ def backup_file(filep,keep_existing=True):
     prepare_backup_dir_path()
     backuppath=abspath(BACKUP_DIR_PATH)+abspath(filep)
     data=read_from_file(filep)
-    dirname=dirname(backuppath)
+    dn=dirname(backuppath)
     if not args.dry_run:
         if args.verbose:
-            print('makedirs "{}"'.format(dirname)
-        makedirs(dirname,exist_ok=True)
+            print('makedirs "{}"'.format(dn))
+        makedirs(dn,exist_ok=True)
     else:
-        print("dry run makedirs: {}".format(dirname)
+        print("dry run makedirs: {}".format(dn))
     if isdir(backuppath):
         raise Exception("ERROR: backup path \""+backuppath+"\" exists and is a directory.")
     if not keep_existing or (keep_existing and not exists(backuppath)):
@@ -206,8 +222,10 @@ def set_min_in1(control_files):
 def enable_control(control_files):
     set_min_pwm(control_files)
     set_max_pwm(control_files)
-    set_min_in1(control_files)
-    set_max_in1(control_files)
+    if not MAX_FAN_SPEED_FN is None:
+        set_min_in1(control_files)
+    if not MAX_FAN_SPEED_FN is None:
+        set_max_in1(control_files)
     backup_file(control_files["enable"]["path"])
     write_to_file(b"1",control_files["enable"]["path"])
 
@@ -295,7 +313,7 @@ if __name__=="__main__":
         read_from_file=sudo_read_from_file
         write_to_file=sudo_write_to_file
     control_files=get_controlfiles()
-    if args.test:
+    if args.verbose:
         from pprint import pprint
         pprint(control_files)
     enable_control(control_files)
