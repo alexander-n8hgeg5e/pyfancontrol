@@ -280,7 +280,9 @@ def get_temp():
         avg=sum(avg)/len(avg)
         return avg
 
-def set_pwm(val):
+def set_pwm(val,pwm_cache):
+    if not pwm_cache is None and abs(val-pwm_cache) < 0.01:
+        return
     min_pwm=PWM_RANGE[0]
     max_pwm=PWM_RANGE[-1]
     print("pwm_range={}".format(PWM_RANGE))
@@ -311,6 +313,7 @@ def control_loop():
     global pwm
     global deltazerocount
     pwm=0.5
+    pwm_cache=None
     #deltazerocount=0
     #table_pwm=[]
     while True:
@@ -341,7 +344,8 @@ def control_loop():
                 pwm-=P
             
             pwm=min(max(pwm,0),1)
-            set_pwm(pwm)
+            set_pwm(pwm,pwm_cache)
+            pwm_cache=pwm
             #print("fan_energy = "+str(int(fan_energy/1000)))
             #print("temp       = "+str(temp))
         else:
