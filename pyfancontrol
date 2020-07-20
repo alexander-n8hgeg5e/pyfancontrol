@@ -142,7 +142,7 @@ def get_controlfiles():
                                 if args.verbose:
                                     print("ok")
                                 control_files[k]["path"] = check_path
-                            else:
+                            elif args.verbose:
                                 print("not existing")
                         elif args.verbose:
                             print("note: no filename supplied for \"{}\"".format(k))
@@ -285,8 +285,9 @@ def set_pwm(val,pwm_cache):
         return
     min_pwm=PWM_RANGE[0]
     max_pwm=PWM_RANGE[-1]
-    print("pwm_range={}".format(PWM_RANGE))
-    print("min_pwm,max_pwm,value={}, {}, {}".format(min_pwm,max_pwm,val))
+    if args.verbose:
+        print("pwm_range={}".format(PWM_RANGE))
+        print("min_pwm,max_pwm,value={}, {}, {}".format(min_pwm,max_pwm,val))
     pwm_val=min_pwm+round((max_pwm-min_pwm)*val)
     write_to_file(str(pwm_val).encode(),control_files["out"]["path"])
 
@@ -323,7 +324,8 @@ def control_loop():
             print("temp={}".format(temp))
         delta=temp-TARGET_TEMP
         if delta != 0 or fan_speed < MIN_IN1 or fan_speed > MAX_IN1:
-            print("delta temp = "+str(delta))
+            if args.verbose:
+                print("delta temp = "+str(delta))
 
             ## update table
             #if deltazerocount > 0:
@@ -333,7 +335,8 @@ def control_loop():
            
             if MIN_IN1 < fan_speed < MAX_IN1:
                 adj=P*delta**3
-                print("pwm,delta*P",round(pwm,3),round(adj,3))
+                if args.verbose:
+                    print("pwm,delta*P",round(pwm,3),round(adj,3))
                 pwm+=adj
                 #old_pwm=pwm
                 #pwm=(2*pwm+eval_table(table_pwm))/3
@@ -349,10 +352,12 @@ def control_loop():
             #print("fan_energy = "+str(int(fan_energy/1000)))
             #print("temp       = "+str(temp))
         else:
-            print("temp ok")
+            if args.verbose:
+                print("temp ok")
             #deltazerocount+=1
         sleep(INTERVAL)
-        print()
+        if args.verbose:
+            print()
 
 if __name__=="__main__":
     parse_args()
