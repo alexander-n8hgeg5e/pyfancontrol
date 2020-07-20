@@ -281,7 +281,7 @@ def get_temp():
         return avg
 
 def set_pwm(val,pwm_cache):
-    if not pwm_cache is None and abs(val-pwm_cache) < 0.01:
+    if not pwm_cache is None and abs(val-pwm_cache) < 0.001:
         return
     min_pwm=PWM_RANGE[0]
     max_pwm=PWM_RANGE[-1]
