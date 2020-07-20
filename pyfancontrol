@@ -67,7 +67,7 @@ def parse_args():
     MAX_IN1=args.max_in1
 
     EXTRA_SET_FILES.append((args.pwm[0],args.pwm[1]+"_min",PWM_RANGE[0],"min_pwm"))
-    EXTRA_SET_FILES.append((args.pwm[0],args.pwm[1]+"_max",PWM_RANGE[1],"max_pwm"))
+    EXTRA_SET_FILES.append((args.pwm[0],args.pwm[1]+"_max",PWM_RANGE[-1],"max_pwm"))
 
     EXTRA_SET_FILES.append((args.in1[0],args.min_in1_fn,args.min_in1,"min_in1"))
     EXTRA_SET_FILES.append((args.in1[0],args.max_in1_fn,args.max_in1,"max_in1"))
